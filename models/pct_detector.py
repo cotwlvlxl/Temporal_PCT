@@ -77,6 +77,7 @@ class PCT(BasePose):
                 joints_3d_visible=None,
                 img_metas=None,
                 return_loss=True,
+                prev_latent=None,
                 **kwargs):
         """Calls either forward_train or forward_test depending on whether
         return_loss=True. Note this setting will change the expected inputs.
@@ -119,18 +120,20 @@ class PCT(BasePose):
             joints = None
 
         if return_loss:
-            return self.forward_train(img, joints, img_metas, **kwargs)
+            return self.forward_train(img, joints, img_metas,
+                                     prev_latent=prev_latent, **kwargs)
         return self.forward_test(
-            img, joints, img_metas, **kwargs)
+            img, joints, img_metas, prev_latent=prev_latent, **kwargs)
 
-    def forward_train(self, img, joints, img_metas, **kwargs):
+    def forward_train(self, img, joints, img_metas, prev_latent=None, **kwargs):
         """Defines the computation performed at every call when training."""
 
         output = None if self.stage_pct == "tokenizer" else self.backbone(img)
         extra_output = self.extra_backbone(img) if self.image_guide else None
 
-        p_logits, p_joints, g_logits, e_latent_loss = \
-            self.keypoint_head(output, extra_output, joints)
+        p_logits, p_joints, g_logits, e_latent_loss, latent_feat = \
+            self.keypoint_head(output, extra_output, joints,
+                               prev_latent=prev_latent)
 
         # if return loss
         losses = dict()
@@ -153,7 +156,7 @@ class PCT(BasePose):
                     p_joints, joints, e_latent_loss)
             losses.update(keypoint_losses)
         
-        return losses
+        return losses, latent_feat
 
     def get_class_accuracy(self, output, target, topk):
         
@@ -166,7 +169,7 @@ class PCT(BasePose):
             correct[:k].reshape(-1).float().sum(0) \
                 * 100. / batch_size for k in topk]
 
-    def forward_test(self, img, joints, img_metas, **kwargs):
+    def forward_test(self, img, joints, img_metas, prev_latent=None, **kwargs):
         """Defines the computation performed at every call when testing."""
         assert img.size(0) == len(img_metas)
 
@@ -181,8 +184,9 @@ class PCT(BasePose):
         extra_output = self.extra_backbone(img) \
             if self.image_guide and self.stage_pct == "tokenizer" else None
         
-        p_joints, encoding_scores = \
-            self.keypoint_head(output, extra_output, joints, train=False)
+        p_joints, encoding_scores, latent_feat = \
+            self.keypoint_head(output, extra_output, joints,
+                               prev_latent=prev_latent, train=False)
         score_pose = joints[:,:,2:] if self.stage_pct == "tokenizer" else \
             encoding_scores.mean(1, keepdim=True).repeat(1,p_joints.shape[1],1)
 
@@ -206,9 +210,10 @@ class PCT(BasePose):
             else:
                 joints_flipped = None
                 
-            p_joints_f, encoding_scores_f = \
-                self.keypoint_head(features_flipped, \
-                    extra_output_flipped, joints_flipped, train=False)
+            p_joints_f, encoding_scores_f, _ = \
+                self.keypoint_head(features_flipped,
+                    extra_output_flipped, joints_flipped,
+                    prev_latent=prev_latent, train=False)
 
             p_joints_f = p_joints_f[:,FLIP_INDEX[self.dataset_name],:]
             p_joints_f[:,:,0] = img.shape[-1] - 1 - p_joints_f[:,:,0]
@@ -263,7 +268,7 @@ class PCT(BasePose):
         results.update(final_preds)
         results['output_heatmap'] = None
 
-        return results
+        return results, latent_feat
 
     def show_result(self):
         # Not implemented

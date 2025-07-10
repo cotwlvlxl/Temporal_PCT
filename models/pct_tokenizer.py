@@ -14,6 +14,7 @@ from mmpose.models.builder import HEADS
 from timm.models.layers import trunc_normal_
 
 from .modules import MixerLayer
+from .temporal_codebook import TemporalCodebook
     
 
 @HEADS.register_module()
@@ -35,7 +36,8 @@ class PCT_Tokenizer(nn.Module):
                  tokenizer=None,
                  num_joints=17,
                  guide_ratio=0,
-                 guide_channels=0):
+                 guide_channels=0,
+                 temporal_codebook=None):
         super().__init__()
 
         self.stage_pct = stage_pct
@@ -86,9 +88,19 @@ class PCT_Tokenizer(nn.Module):
         self.codebook.data.normal_()
         self.register_buffer('ema_cluster_size', 
             torch.zeros(self.token_class_num))
-        self.register_buffer('ema_w', 
+        self.register_buffer('ema_w',
             torch.empty(self.token_class_num, self.token_dim))
-        self.ema_w.data.normal_()        
+        self.ema_w.data.normal_()
+
+        if temporal_codebook is not None:
+            assert temporal_codebook['token_dim'] == self.token_dim, \
+                'Temporal codebook dim must match token dim.'
+            self.temporal_codebook = TemporalCodebook(
+                self.token_dim,
+                temporal_codebook['token_class_num'],
+                temporal_codebook.get('ema_decay', 0.9))
+        else:
+            self.temporal_codebook = None
         
         self.decoder_token_mlp = nn.Linear(
             self.token_num, self.num_joints)
@@ -105,7 +117,7 @@ class PCT_Tokenizer(nn.Module):
 
         self.loss = build_loss(tokenizer['loss_keypoint'])
 
-    def forward(self, joints, joints_feature, cls_logits, train=True):
+    def forward(self, joints, joints_feature, cls_logits, prev_latent=None, train=True):
         """Forward function. """
 
         if train or self.stage_pct == "tokenizer":
@@ -148,9 +160,19 @@ class PCT_Tokenizer(nn.Module):
             encoding_indices = None
         
         if self.stage_pct == "classifier":
-            part_token_feat = torch.matmul(cls_logits, self.codebook)
+            spatial_feat = torch.matmul(cls_logits, self.codebook)
         else:
-            part_token_feat = torch.matmul(encodings, self.codebook)
+            spatial_feat = torch.matmul(encodings, self.codebook)
+
+        temporal_indices = None
+        t_loss = None
+        if self.temporal_codebook is not None and prev_latent is not None:
+            diff_feat = encode_feat - prev_latent
+            temporal_feat, temporal_indices, t_loss = self.temporal_codebook(
+                diff_feat, train and self.stage_pct == "tokenizer")
+            part_token_feat = spatial_feat + temporal_feat
+        else:
+            part_token_feat = spatial_feat
 
         if train and self.stage_pct == "tokenizer":
             # Updating Codebook using EMA
@@ -175,6 +197,8 @@ class PCT_Tokenizer(nn.Module):
             self.ema_w = self.ema_w * self.decay + (1 - self.decay) * sync_dw
             self.codebook = self.ema_w / self.ema_cluster_size.unsqueeze(1)
             e_latent_loss = F.mse_loss(part_token_feat.detach(), encode_feat)
+            if t_loss is not None:
+                e_latent_loss = e_latent_loss + t_loss
             part_token_feat = encode_feat + (part_token_feat - encode_feat).detach()
         else:
             e_latent_loss = None
@@ -192,7 +216,7 @@ class PCT_Tokenizer(nn.Module):
 
         recoverd_joints = self.recover_embed(decode_feat)
 
-        return recoverd_joints, encoding_indices, e_latent_loss
+        return recoverd_joints, (encoding_indices, temporal_indices), e_latent_loss, encode_feat.detach()
 
     def get_loss(self, output_joints, joints, e_latent_loss):
         """Calculate loss for training tokenizer.
