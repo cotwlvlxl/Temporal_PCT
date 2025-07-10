@@ -133,7 +133,7 @@ class PCT_Head(TopdownHeatmapBaseHead):
                 
         return losses
 
-    def forward(self, x, extra_x, joints=None, train=True):
+    def forward(self, x, extra_x, joints=None, prev_latent=None, train=True):
         """Forward function."""
         
         if self.stage_pct == "classifier":
@@ -164,13 +164,14 @@ class PCT_Head(TopdownHeatmapBaseHead):
         else:
             joints_feat = self.extract_joints_feat(extra_x[-1], joints)
 
-        output_joints, cls_label, e_latent_loss = \
-            self.tokenizer(joints, joints_feat, cls_logits_softmax, train=train)
+        output_joints, cls_label, e_latent_loss, latent_feat = \
+            self.tokenizer(joints, joints_feat, cls_logits_softmax,
+                           prev_latent, train=train)
 
         if train:
-            return cls_logits, output_joints, cls_label, e_latent_loss
+            return cls_logits, output_joints, cls_label, e_latent_loss, latent_feat
         else:
-            return output_joints, encoding_scores
+            return output_joints, encoding_scores, latent_feat
 
     def _make_transition_for_head(self, inplanes, outplanes):
         transition_layer = [
