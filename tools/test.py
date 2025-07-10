@@ -16,6 +16,8 @@ from mmpose.datasets import build_dataloader, build_dataset
 
 from models import build_posenet
 
+from torchviz import make_dot
+
 try:
     from mmcv.runner import wrap_fp16_model
 except ImportError:
@@ -124,6 +126,20 @@ def main():
 
     # build the model and load checkpoint
     model = build_posenet(cfg.model)
+
+    try:
+        make_dot(model(dataset[0]), params=dict(model.named_parameters())).render("model_torchviz", format="png")
+        print("Model visualization saved as model_torchviz.png")
+        # torch.onnx.export(model, dummy_data, "model.onnx", export_params=True,
+        #                   opset_version=11, do_constant_folding=True,
+        #                   input_names=['input'], output_names=['output'],
+        #                   dynamic_axes={'input': {0: 'batch_size'},
+        #                                 'output': {0: 'batch_size'}})
+        # print("Model exported to ONNX format successfully.")
+    except Exception as e:
+        print(f'Error saving initial model: {e}')
+        raise
+
     fp16_cfg = cfg.get('fp16', None)
     if fp16_cfg is not None:
         wrap_fp16_model(model)

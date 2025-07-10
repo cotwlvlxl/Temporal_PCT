@@ -54,14 +54,14 @@ data_cfg = dict(
     vis_thr=0.2,
     use_gt_bbox=True,
     det_bbox_thr=0.0,
-    bbox_file='data/coco/person_detection_results/'
+    bbox_file='/home/msj/code/PCT/data/coco/person_detection_results/'
     'COCO_val2017_detections_AP_H_56_person.json',
 )
 
 # model settings
 model = dict(
     type='PCT',
-    pretrained='weights/heatmap/swin_large.pth',
+    pretrained='/home/msj/code/PCT/weights/heatmap/swin_large.pth',
     backbone=dict(
         type='SwinV2TransformerRPE2FC',
         embed_dim=192,
@@ -202,7 +202,7 @@ val_pipeline = [
 
 test_pipeline = val_pipeline
 
-data_root = 'data/coco'
+data_root = '/home/msj/code/PCT/data/coco'
 data = dict(
     samples_per_gpu=64,
     workers_per_gpu=2,
